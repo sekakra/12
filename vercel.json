@@ -1,10 +1,6 @@
 {
   "version": 2,
   "cleanUrls": true,
-  "builds": [
-    { "src": "api/*.js", "use": "@vercel/node" },
-    { "src": "index.html", "use": "@vercel/static" }
-  ],
   "routes": [
     { "src": "/api/generate", "dest": "/api/generate.js" },
     { "src": "/api/convert", "dest": "/api/convert.js" },
@@ -12,9 +8,15 @@
   ],
   "headers": [
     {
-      "source": "/(.*)",
+      "source": "/api/(.*)",
       "headers": [
-        { "key": "X-Frame-Options", "value": "SAMEORIGIN" },
+        { "key": "Cache-Control", "value": "no-store, max-age=0, must-revalidate" },
+        { "key": "X-Content-Type-Options", "value": "nosniff" }
+      ]
+    },
+    {
+      "source": "/index.html",
+      "headers": [
         { "key": "X-Content-Type-Options", "value": "nosniff" }
       ]
     }

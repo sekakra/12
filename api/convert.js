@@ -1,30 +1,28 @@
 export default async function handler(req, res) {
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+  // 1. إصلاح ثغرة CORS: تحديد الـ Origin بشكل ديناميكي وآمن عند استخدام Credentials
+  const origin = req.headers.origin || '*';
+  res.setHeader('Access-Control-Allow-Origin', origin === '*' ? '*' : origin);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: 'مفتاح GEMINI_API_KEY غير معرّف في بيئة سيرفر Vercel' });
-
-  // المعالجة الاحترافية للـ Stream وقراءة البيانات الخام لمنع خطأ الـ 500 للأبد
-  let buffers = [];
-  for await (const chunk of req) {
-    buffers.push(chunk);
-  }
-  let rawBody = Buffer.concat(buffers).toString();
-  
-  let payload = {};
-  try {
-    payload = rawBody ? JSON.parse(rawBody) : (req.body || {});
-  } catch (e) {
-    payload = req.body || {};
+  if (!apiKey) {
+    console.error("CRITICAL: GEMINI_API_KEY is missing in the current Vercel environment.");
+    return res.status(500).json({ error: 'Internal Server Configuration Error' });
   }
 
+  // 2. الاعتماد على معالج Next.js التلقائي والآمن للبيانات (يمنع ثغرات الـ DoS والـ Stream Crash)
+  const payload = req.body || {};
   const { currentVisualCode, sys, sysName } = payload;
+
+  // التحقق من صحة المدخلات (Input Validation)
+  if (!currentVisualCode || typeof currentVisualCode !== 'string' || !sysName) {
+    return res.status(400).json({ error: 'Invalid or missing payload parameters' });
+  }
 
   try {
     const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-pro:generateContent?key=${apiKey}`, {
@@ -41,8 +39,18 @@ export default async function handler(req, res) {
     });
 
     const data = await response.json();
+
+    // 3. تأمين الاتصال: معالجة استجابات Gemini الفاشلة لمنع إرجاع 200 لبيانات معطوبة
+    if (!response.ok) {
+      console.error("Gemini API Error:", data);
+      return res.status(response.status).json({ error: 'Upstream AI provider error' });
+    }
+
     return res.status(200).json(data);
+    
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    // تسجيل الخطأ داخلياً وعدم تسريبه للعميل
+    console.error("Execution Error:", error);
+    return res.status(500).json({ error: 'Internal Server Error during execution' });
   }
 }

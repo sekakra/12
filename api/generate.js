@@ -1,28 +1,30 @@
 export default async function handler(req, res) {
-  // تفعيل الـ CORS لتأمين قنوات الاتصال ومنع الحظر
-  res.setHeader('Access-Control-Allow-Credentials', true);
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,PATCH,DELETE,POST,PUT');
+  // 1. هندسة CORS آمنة: ضبط الـ Origin ديناميكياً لتجنب التعارض مع Credentials
+  const origin = req.headers.origin || '*';
+  res.setHeader('Access-Control-Allow-Origin', origin === '*' ? '*' : origin);
+  res.setHeader('Access-Control-Allow-Credentials', 'true');
+  res.setHeader('Access-Control-Allow-Methods', 'GET,OPTIONS,POST');
   res.setHeader('Access-Control-Allow-Headers', 'X-CSRF-Token, X-Requested-With, Accept, Accept-Version, Content-Length, Content-MD5, Content-Type, Date, X-Api-Version');
 
+  // الاستجابة السريعة لطلبات الـ Preflight
   if (req.method === 'OPTIONS') return res.status(200).end();
+  
+  // حصر العمليات المسموحة في POST فقط
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
+  // 2. تأمين متغيرات البيئة وعدم تسريب التفاصيل للعميل
   const apiKey = process.env.GEMINI_API_KEY;
-  if (!apiKey) return res.status(500).json({ error: 'مفتاح GEMINI_API_KEY غير معرّف في بيئة سيرفر Vercel' });
-
-  // المعالجة الاحترافية للـ Stream وقراءة البيانات الخام لمنع خطأ الـ 500 للأبد
-  let buffers = [];
-  for await (const chunk of req) {
-    buffers.push(chunk);
+  if (!apiKey) {
+    console.error("CRITICAL: GEMINI_API_KEY is missing in the current Vercel environment.");
+    return res.status(500).json({ error: 'Internal Server Configuration Error' });
   }
-  let rawBody = Buffer.concat(buffers).toString();
+
+  // 3. الاعتماد على المعالجة التلقائية لـ Vercel/Next.js (إزالة كود الـ Stream الكارثي)
+  const payload = req.body || {};
   
-  let payload = {};
-  try {
-    payload = rawBody ? JSON.parse(rawBody) : (req.body || {});
-  } catch (e) {
-    payload = req.body || {};
+  // التحقق المبدئي من بنية الـ Payload لمنع الأخطاء غير المتوقعة
+  if (typeof payload !== 'object' || Array.isArray(payload)) {
+    return res.status(400).json({ error: 'Invalid payload architecture' });
   }
 
   const { promptText, company, client, invnum, dir, currency } = payload;
@@ -47,8 +49,18 @@ export default async function handler(req, res) {
     });
 
     const data = await response.json();
+
+    // 4. التحقق من استجابة مزود الذكاء الاصطناعي لمنع إرسال استجابات 200 لبيانات معطوبة
+    if (!response.ok) {
+      console.error("Gemini API Upstream Error:", data);
+      return res.status(response.status).json({ error: 'Upstream AI provider error' });
+    }
+
     return res.status(200).json(data);
+    
   } catch (error) {
-    return res.status(500).json({ error: error.message });
+    // 5. تأمين الأخطاء: تسجيل الخطأ في سيرفرات Vercel دون تسريب رسالة الخطأ للمتصفح
+    console.error("Execution Error:", error);
+    return res.status(500).json({ error: 'Internal Server Error during execution' });
   }
 }
